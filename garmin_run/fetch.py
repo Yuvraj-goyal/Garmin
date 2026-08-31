@@ -233,10 +233,22 @@ def fetch_activities(
     start = end - dt.timedelta(days=days)
     echo(f"  Asking Garmin for activities from {start} to {end} ...")
 
-    activities = cache.get_or_fetch(
-        f"activities_{start}_{end}",
-        lambda: api.get_activities_by_date(start.isoformat(), end.isoformat()),
-    )
+    # The activity LIST is deliberately never served from cache. It is one
+    # API call, and caching it under a key ending in today's date means a
+    # re-run later the same day cannot see a workout synced an hour ago --
+    # which is exactly when you re-run. The per-activity downloads below are
+    # the expensive part and they stay cached.
+    list_key = cache.root / f"activities_{start}_{end}.json"
+    try:
+        activities = api.get_activities_by_date(start.isoformat(), end.isoformat())
+        list_key.write_text(json.dumps(activities))
+    except Exception as exc:
+        if list_key.exists():
+            echo(f"  Could not reach Garmin ({str(exc)[:50]}); using the last")
+            echo(f"  downloaded list instead.")
+            activities = json.loads(list_key.read_text())
+        else:
+            raise
 
     census: dict[str, int] = {}
     for activity in activities:

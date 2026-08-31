@@ -513,6 +513,9 @@ def build_html(context: dict[str, Any]) -> str:
 
 <div class="foot">Built from {len(activities)} activities over
 {context['days']} days, downloaded read-only from your own Garmin account.<br>
+<b>Generated {html.escape(context['generated_at'])}.</b>
+Refreshing this page will not change it &mdash; it is a snapshot. Re-run
+<code>python3 bootstrap.py</code> to pick up new activities.<br>
 This file is entirely self-contained. Nothing in it loads from the internet.</div>
 
 </div>

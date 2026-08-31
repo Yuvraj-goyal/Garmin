@@ -576,6 +576,7 @@ def main() -> int:
         "threshold_pace": threshold_pace, "findings": findings, "app": app,
         "easy_gap_seconds": easy_gap, "our_easy_ceiling": our_easy,
         "app_easy_ceiling": app_easy, "days": args.days,
+        "generated_at": dt.datetime.now().strftime("%A %d %B %Y at %H:%M"),
     }
     html_text = report.build_html(context)
 
