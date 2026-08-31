@@ -263,37 +263,41 @@ def main() -> int:
     passed_all = 0
     unverifiable = 0
     failed_checks: list[str] = []
+    not_recorded: dict[str, int] = {}
     for item in activities:
         stream = item["stream"]
-        if not stream.verifiable_checks:
-            unverifiable += 1
-            continue
+        for check in stream.checks:
+            if check.status == "not recorded in the stream":
+                not_recorded[check.name] = not_recorded.get(check.name, 0) + 1
         if stream.is_verified:
             passed_all += 1
-        else:
-            for check in stream.verifiable_checks:
-                if not check.passed:
-                    failed_checks.append(
-                        f"{item['date']} {item['name']}: {check.name} "
-                        f"stream {check.from_stream:.1f} vs summary "
-                        f"{check.from_summary:.1f} {check.units} "
-                        f"({check.difference_percent:+.1f}%)"
-                    )
+        elif not stream.confirmations:
+            unverifiable += 1
+        for check in stream.mismatches:
+            failed_checks.append(
+                f"{item['date']} {item['name']}: {check.name} "
+                f"{check.describe()}"
+            )
 
-    echo(f"  Verification on the most recent run:")
+    echo(f"  Verification on {sample['date']} {sample['name']}:")
     for check in sample["stream"].checks:
-        if check.from_summary is None:
-            echo(f"    {check.name:<20} summary value not provided, skipped")
-            continue
-        verdict = "OK" if check.passed else "MISMATCH"
-        echo(f"    {check.name:<20} stream {check.from_stream:>9.2f} vs "
-             f"summary {check.from_summary:>9.2f} {check.units:<4} "
-             f"{check.difference_percent:+6.2f}%  {verdict}")
+        echo(f"    {check.name:<20} {check.describe()}")
     echo("")
-    echo(f"  {passed_all} of {len(activities)} activities verified against\n       their own summary.")
+    echo(f"  {passed_all} of {len(activities)} activities verified against their")
+    echo(f"  own summary. {len(failed_checks)} genuine mismatch"
+         f"{'' if len(failed_checks) == 1 else 'es'} found.")
     if unverifiable:
-        echo(f"  {unverifiable} could NOT be verified: their summary carried no")
-        echo(f"  comparable values. Those are not counted as passing.")
+        echo(f"  {unverifiable} could NOT be verified at all: no metric in them had")
+        echo(f"  both a stream value and a summary value to compare. Those are")
+        echo(f"  not counted as passing.")
+    if not_recorded:
+        echo("")
+        echo("  Metrics the summary reports but the stream never recorded:")
+        for name, count in sorted(not_recorded.items(), key=lambda kv: -kv[1]):
+            echo(f"    {name:<20} missing in {count} activit"
+                 f"{'y' if count == 1 else 'ies'}")
+        echo("  That is normal for a ride with no heart-rate strap. It is not")
+        echo("  evidence the mapping is wrong, so it does not fail an activity.")
     if passed_all == 0:
         echo("")
         echo("  STOPPING. Not one activity could be verified, so there is no")
@@ -496,8 +500,11 @@ def main() -> int:
     else:
         echo("  Garmin did not expose a stated basis on this account.")
 
+    # Runs only. A 5 km covered on a bike takes about eight minutes and would
+    # masquerade as a 5K personal best, making Garmin's race prediction look
+    # absurdly slow and inverting the entire comparison below.
     best_5k = None
-    for item in activities:
+    for item in foot_activities:
         elapsed, _ = zones.fastest_time_for_distance(
             item["stream"].time, item["stream"].distance, 5000.0
         )

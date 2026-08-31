@@ -53,6 +53,31 @@ class Check:
     units: str
     passed: bool
 
+    @property
+    def status(self) -> str:
+        """Four distinct outcomes, which must never be collapsed into two.
+
+        A value the stream could not produce is not the same finding as two
+        values that disagree. The first says a metric was not recorded; the
+        second says the column mapping is wrong. Only the second is alarming.
+        """
+        if self.from_summary is None:
+            return "no summary value"
+        if self.from_stream is None:
+            return "not recorded in the stream"
+        return "OK" if self.passed else "MISMATCH"
+
+    def describe(self) -> str:
+        """One line, safe to print whatever is or is not present."""
+        stream = f"{self.from_stream:.2f}" if self.from_stream is not None else "--"
+        summary = f"{self.from_summary:.2f}" if self.from_summary is not None else "--"
+        difference = (
+            f"{self.difference_percent:+.2f}%"
+            if self.difference_percent is not None else "  --  "
+        )
+        return (f"stream {stream:>9} vs summary {summary:>9} "
+                f"{self.units:<4} {difference:>8}  {self.status}")
+
 
 @dataclass
 class Stream:
@@ -79,15 +104,25 @@ class Stream:
         return [c for c in self.checks if c.from_summary is not None]
 
     @property
-    def is_verified(self) -> bool:
-        """True only if at least one check ran AND every check that ran passed.
+    def mismatches(self) -> list[Check]:
+        """Checks where both values existed and genuinely disagreed."""
+        return [c for c in self.checks if c.status == "MISMATCH"]
 
-        An activity whose summary carried no comparable values is NOT verified.
-        Treating 'nothing to check' as 'everything checks out' is how a broken
-        column mapping slips through unnoticed.
+    @property
+    def confirmations(self) -> list[Check]:
+        """Checks that actually compared two real numbers and agreed."""
+        return [c for c in self.checks if c.status == "OK"]
+
+    @property
+    def is_verified(self) -> bool:
+        """At least one real comparison agreed, and none disagreed.
+
+        A metric the watch never recorded (heart rate on a bike ride with no
+        strap) is not evidence against the mapping, so it does not fail an
+        activity. Nothing to check at all is NOT the same as everything
+        checking out, so an activity with no comparisons is never verified.
         """
-        ran = self.verifiable_checks
-        return bool(ran) and all(c.passed for c in ran)
+        return bool(self.confirmations) and not self.mismatches
 
     @property
     def sample_count(self) -> int:
