@@ -44,6 +44,32 @@ Threshold *pace* is only ever derived from running — minutes per mile means
 nothing on a bike — and threshold heart rate likewise, because it differs by
 sport. The tool says which pool each number came from.
 
+## Keeping it up to date automatically
+
+The page is a snapshot, not a live view. Refreshing the browser will not
+change it; re-running the tool regenerates it. To have that happen on its own:
+
+```
+python3 schedule.py install              # every 4 hours
+python3 schedule.py install --at 06:00   # or a daily time
+python3 schedule.py status               # installed? did the last run work?
+python3 schedule.py uninstall            # remove it entirely
+```
+
+On macOS this installs a `launchd` agent in `~/Library/LaunchAgents`. It runs
+once immediately, then on your chosen schedule, and catches up after your Mac
+wakes if a scheduled time was missed while it slept. On Linux it prints the
+`crontab` line to add instead.
+
+**The one way it fails.** Garmin eventually ends the saved session and asks for
+a fresh login. A background job cannot answer a 2FA prompt, so it will start
+failing quietly and your page will simply stop getting newer. That is what
+`schedule.py status` is for: it reports the last run's exit code and says so
+plainly. Running it by hand once restores the session and the schedule resumes.
+
+Everything it runs is your local script. It sends nothing anywhere, and
+removing it leaves your data, cache and pages untouched.
+
 ## Privacy
 
 - **Everything stays on this computer.** Nothing is uploaded anywhere.
