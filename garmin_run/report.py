@@ -94,6 +94,14 @@ LIST_CSS = """
   color:#8b96a3}
 .sumcard .val{font-size:17px;font-weight:660;margin-top:4px;
   font-variant-numeric:tabular-nums}
+.fresh{font-size:11.5px;margin-top:7px;display:flex;align-items:center;gap:6px}
+.fresh i{width:7px;height:7px;border-radius:50%;background:#27ae60;flex:none;
+  font-style:normal}
+.fresh.stale i{background:#f2994a}
+.fresh.old i{background:#eb5757}
+.fresh span{color:#8b96a3}
+.fresh.stale span,.fresh.old span{color:#95591b}
+.fresh.old span{color:#a32b2b}
 """
 
 CSS = """
@@ -449,7 +457,9 @@ def build_html(context: dict[str, Any]) -> str:
   <div id="listview">
     <div class="hdr"><h1>Your training</h1>
       <div class="when">{len(activities)} activities over
-      {context['days']} days</div></div>
+      {context['days']} days</div>
+      <div class="fresh" id="fresh" data-generated="{context['generated_iso']}">
+        <i></i><span>&mdash;</span></div></div>
     <div class="sumcard">
       <div><div class="lab">Distance</div>
         <div class="val">{total_miles:.0f} mi</div></div>
@@ -520,6 +530,33 @@ This file is entirely self-contained. Nothing in it loads from the internet.</di
 
 </div>
 <script>
+(function(){{
+  // The page is a snapshot. Say how old it is in the reader's own terms,
+  // computed when they open it, so a stale page cannot pass for a fresh one.
+  var el = document.getElementById('fresh');
+  if (!el) return;
+  var made = new Date(el.dataset.generated);
+  if (isNaN(made)) return;
+  var mins = Math.round((Date.now() - made) / 60000);
+  var text;
+  if (mins < 2) text = 'Updated just now';
+  else if (mins < 60) text = 'Updated ' + mins + ' minutes ago';
+  else if (mins < 120) text = 'Updated an hour ago';
+  else if (mins < 1440) text = 'Updated ' + Math.round(mins / 60) + ' hours ago';
+  else if (mins < 2880) text = 'Updated yesterday';
+  else text = 'Updated ' + Math.round(mins / 1440) + ' days ago';
+
+  if (mins > 2880) {{
+    el.className = 'fresh old';
+    text += ' \u2014 the automatic refresh may have stopped. Run: '
+          + 'python3 schedule.py status';
+  }} else if (mins > 600) {{
+    el.className = 'fresh stale';
+    text += ' \u2014 re-run to pick up newer activities';
+  }}
+  el.querySelector('span').textContent = text;
+}})();
+
 function showTab(n){{
   document.querySelectorAll('.tabview').forEach(function(v){{
     v.hidden = (v.dataset.tab !== String(n));

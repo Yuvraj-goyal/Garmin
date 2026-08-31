@@ -169,6 +169,43 @@ def uninstall(_: argparse.Namespace) -> int:
     return 0
 
 
+def shortcut(args: argparse.Namespace) -> int:
+    """Put a link to the page on the Desktop.
+
+    A symlink, not a copy: the tool overwrites the same file in place every
+    refresh, so a link always opens the current page while a copy would
+    freeze whatever was there the day you made it.
+    """
+    page = HERE / "out" / "training.html"
+    desktop = Path.home() / "Desktop"
+    if not desktop.is_dir():
+        print(f"  No Desktop folder found at {desktop}.")
+        print(f"  Open the page directly instead: {page}")
+        return 1
+
+    link = desktop / (args.name or "Training.html")
+    if link.exists() and not link.is_symlink():
+        print(f"  {link} already exists and is a real file, not a link.")
+        print("  Refusing to overwrite it. Pass a different --name.")
+        return 1
+    if link.is_symlink():
+        link.unlink()
+    link.symlink_to(page)
+
+    print(f"  Added: {link}")
+    print(f"  It points at {page}")
+    print("")
+    if not page.exists():
+        print("  That page does not exist yet, so the link will not open until")
+        print("  the tool has run once. That is expected if you have just")
+        print("  installed it.")
+    else:
+        print("  Double-click it any time. Because it is a link rather than a")
+        print("  copy, it always opens the latest refresh, and the line under")
+        print("  the title tells you how old that refresh is.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command")
@@ -186,6 +223,11 @@ def main() -> int:
         func=status)
     sub.add_parser("uninstall", help="remove it entirely").set_defaults(
         func=uninstall)
+
+    link = sub.add_parser("shortcut", help="put a link to the page on the Desktop")
+    link.add_argument("--name", default=None,
+                      help="filename for the link (default Training.html)")
+    link.set_defaults(func=shortcut)
 
     args = parser.parse_args()
     if not getattr(args, "func", None):

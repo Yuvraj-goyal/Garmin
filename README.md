@@ -61,6 +61,17 @@ once immediately, then on your chosen schedule, and catches up after your Mac
 wakes if a scheduled time was missed while it slept. On Linux it prints the
 `crontab` line to add instead.
 
+Put a link to the page on your Desktop so you never have to find the path:
+
+```
+python3 schedule.py shortcut
+```
+
+That is a symlink, not a copy. Every refresh overwrites the same file in place,
+so the link always opens the current page; a copy would freeze whatever was
+there the day you made it. The line under the title says how old the page is
+in plain words, so a stale page cannot pass for a fresh one.
+
 **The one way it fails.** Garmin eventually ends the saved session and asks for
 a fresh login. A background job cannot answer a 2FA prompt, so it will start
 failing quietly and your page will simply stop getting newer. That is what

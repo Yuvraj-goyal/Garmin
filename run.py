@@ -577,6 +577,7 @@ def main() -> int:
         "easy_gap_seconds": easy_gap, "our_easy_ceiling": our_easy,
         "app_easy_ceiling": app_easy, "days": args.days,
         "generated_at": dt.datetime.now().strftime("%A %d %B %Y at %H:%M"),
+        "generated_iso": dt.datetime.now().astimezone().isoformat(),
     }
     html_text = report.build_html(context)
 
