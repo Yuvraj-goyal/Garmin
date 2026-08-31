@@ -8,6 +8,7 @@ back to your Garmin account. Your password is never stored.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import sys
 import webbrowser
 from pathlib import Path
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from garmin_run import appmodel, fetch, report, streams, zones
 from garmin_run.util import (
     fmt_duration,
+    metres_to_miles,
     fmt_pace,
     metres_to_feet,
     speed_to_pace_min_per_mile,
@@ -82,6 +84,7 @@ def mile_splits(stream, pace_zone_list) -> list[dict]:
                 "elevation_gain": metres_to_feet(
                     streams.elevation_gain_metres(segment_elevations)
                 ),
+                "mph": 60.0 / pace if pace else None,
                 "zone": zone_for_pace(pace, pace_zone_list),
             })
             start = (t, start[1] + METRE_MILE, hr, elevation)
@@ -101,6 +104,7 @@ def mile_splits(stream, pace_zone_list) -> list[dict]:
             "elevation_gain": metres_to_feet(
                 streams.elevation_gain_metres(segment_elevations)
             ),
+            "mph": 60.0 / pace if pace else None,
             "zone": zone_for_pace(pace, pace_zone_list),
         })
     return out
@@ -118,6 +122,7 @@ def lap_chart_data(splits_payload, pace_zone_list, fallback) -> list[dict]:
         out.append({
             "label": str(i),
             "pace": pace,
+            "mph": (60.0 / pace) if pace else None,
             "hr": lap.get("averageHR"),
             "elevation_gain": metres_to_feet(lap.get("elevationGain")),
             "zone": zone_for_pace(pace, pace_zone_list),
@@ -438,7 +443,7 @@ def main() -> int:
          f"{threshold_pace.confidence} confidence")
 
     # ------------------------------------- step 6: pick the run and build it
-    step("6", "Building the page for your most recent quality run")
+    step("6", "Building the page")
 
     recent = sorted(foot_activities, key=lambda a: a["date"], reverse=True)
     if args.feature:
@@ -470,20 +475,58 @@ def main() -> int:
         echo(f"  No clearly hard run in the window, so using the longest recent one:")
         echo(f"  {target['date']} {target['name']}")
 
-    if not target.get("splits"):
-        target["splits"] = fetch.fetch_activity_bundle(
-            api, cache, target["id"]
-        )["splits"]
+    # ---- a panel for EVERY activity, not just the featured one ----------
+    echo("")
+    echo(f"  Building panels for all {len(activities)} activities ...")
 
-    stream = target["stream"]
-    splits = mile_splits(stream, pace_zone_list)
-    laps = lap_chart_data(target["splits"], pace_zone_list, splits)
+    panels: list[dict] = []
+    for item in sorted(activities, key=lambda a: a["date"], reverse=True):
+        item_stream = item["stream"]
+        if not item.get("splits"):
+            item["splits"] = fetch.fetch_activity_bundle(
+                api, cache, item["id"]
+            )["splits"]
 
-    pace_zone_seconds = zones.time_in_pace_zones(stream, pace_zone_list)
-    hr_zone_seconds = zones.time_in_heart_rate_zones(stream, hr_zone_list)
+        item_splits = mile_splits(item_stream, pace_zone_list)
+        item_laps = lap_chart_data(item["splits"], pace_zone_list, item_splits)
+        on_foot = fetch.is_run(item["raw"])
 
-    echo(f"  {len(splits)} mile splits, {len(laps)} laps, "
-         f"{stream.sample_count:,} per-second samples.")
+        summary = item["summary"]
+        miles = metres_to_miles(summary.get("distance"))
+        moving = summary.get("movingDuration") or summary.get("duration") or 0
+        avg_pace = (moving / 60.0) / miles if miles and moving else None
+
+        started = summary.get("startTimeLocal", "")
+        try:
+            stamp = dt.datetime.fromisoformat(str(started))
+            when = stamp.strftime("%A, %d %B %Y at %H:%M")
+            short_date = stamp.strftime("%a %d %b")
+        except (ValueError, TypeError):
+            when = short_date = str(started)[:16]
+
+        panels.append({
+            "id": item["id"], "name": item["name"], "when": when,
+            "short_date": short_date,
+            "sport": report.sport_label(fetch.activity_type_key(item["raw"])),
+            "mode": "pace" if on_foot else "speed",
+            "miles": miles, "moving": moving, "avg_pace": avg_pace,
+            "avg_mph": (60.0 / avg_pace) if avg_pace else 0.0,
+            "avg_hr": summary.get("averageHR"),
+            "splits": item_splits, "laps": item_laps,
+            "pace_zone_seconds": zones.time_in_pace_zones(
+                item_stream, pace_zone_list),
+            "hr_zone_seconds": zones.time_in_heart_rate_zones(
+                item_stream, hr_zone_list),
+            "spikes": item_stream.spikes_removed,
+            "samples": item_stream.sample_count,
+        })
+
+    featured = next(
+        (n for n, panel in enumerate(panels) if panel["id"] == target["id"]), 0
+    )
+    echo(f"  {len(panels)} panels built. The activity list is the landing")
+    echo(f"  screen; tap any activity to open it. The chips filter by sport and")
+    echo(f"  the tabs hold your zones and the Garmin comparison.")
     echo(f"  Time in zone computed from the per-second stream, not from splits.")
 
     # ------------------------------------------- step 7: the honest section
@@ -527,21 +570,18 @@ def main() -> int:
     )
 
     context = {
-        "activity": target["summary"], "stream": stream, "splits": splits,
-        "laps": laps, "pace_zones": pace_zone_list, "hr_zones": hr_zone_list,
-        "pace_zone_seconds": pace_zone_seconds, "hr_zone_seconds": hr_zone_seconds,
+        "activities": panels, "featured": featured,
+        "pace_zones": pace_zone_list, "hr_zones": hr_zone_list,
         "max_hr": max_hr, "threshold_hr": threshold_hr,
         "threshold_pace": threshold_pace, "findings": findings, "app": app,
         "easy_gap_seconds": easy_gap, "our_easy_ceiling": our_easy,
-        "app_easy_ceiling": app_easy, "activity_count": len(activities),
-        "days": args.days,
+        "app_easy_ceiling": app_easy, "days": args.days,
     }
-    # The lap chart draws the watch's laps; the table lists mile splits.
     html_text = report.build_html(context)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f"run-{target['date']}.html"
+    out_file = out_dir / "training.html"
     out_file.write_text(html_text, encoding="utf-8")
 
     # -------------------------------------------------------- step 8: open
