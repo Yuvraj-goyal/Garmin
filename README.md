@@ -11,6 +11,13 @@ actually yours.
 python3 bootstrap.py
 ```
 
+**Needs Python 3.10 or newer.** The Garmin library dropped support for older
+versions; on anything earlier, pip can only offer a 2023 release that is
+missing the endpoints this reads. `bootstrap.py` searches your machine for a
+suitable Python (macOS usually has several, and the `python3` on your PATH is
+often the oldest), uses the newest one it finds, and tells you exactly what to
+install if there isn't one.
+
 That is the whole thing. It sets up an isolated environment, installs the
 open-source [`python-garminconnect`](https://github.com/cyberjunky/python-garminconnect)
 library by cyberjunky, asks you to sign in to Garmin once, downloads 180 days
