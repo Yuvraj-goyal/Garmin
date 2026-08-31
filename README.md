@@ -24,7 +24,23 @@ library by cyberjunky, asks you to sign in to Garmin once, downloads 180 days
 of activities, works out your real zones, writes a self-contained HTML page and
 opens it.
 
-Options: `--days 365` for a longer window, `--no-open` to skip the browser.
+### Options
+
+| Flag | What it does |
+|---|---|
+| `--list-types` | List every activity type in your history with counts, then stop. Start here if you want more than runs. |
+| `--include running` | Default. Runs only. |
+| `--include all` | Every activity: rides, walks, strength, swims, everything. |
+| `--include running,cycling` | A comma list. Accepts groups (`running`, `cycling`, `walking`, `swimming`, `strength`) or raw Garmin type keys such as `strength_training`. |
+| `--feature 12345678` | Put a specific activity on the page instead of the auto-picked one. Ids are shown while downloading. |
+| `--days 365` | A longer window. |
+| `--no-open` | Skip opening the browser. |
+
+**What including other sports does and does not change.** Max heart rate is a
+whole-body ceiling, so every sport you include counts as evidence for it.
+Threshold *pace* is only ever derived from running — minutes per mile means
+nothing on a bike — and threshold heart rate likewise, because it differs by
+sport. The tool says which pool each number came from.
 
 ## Privacy
 

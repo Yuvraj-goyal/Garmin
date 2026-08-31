@@ -74,6 +74,22 @@ class Stream:
     checks: list[Check] = field(default_factory=list)
 
     @property
+    def verifiable_checks(self) -> list[Check]:
+        """Checks that actually had a summary value to compare against."""
+        return [c for c in self.checks if c.from_summary is not None]
+
+    @property
+    def is_verified(self) -> bool:
+        """True only if at least one check ran AND every check that ran passed.
+
+        An activity whose summary carried no comparable values is NOT verified.
+        Treating 'nothing to check' as 'everything checks out' is how a broken
+        column mapping slips through unnoticed.
+        """
+        ran = self.verifiable_checks
+        return bool(ran) and all(c.passed for c in ran)
+
+    @property
     def sample_count(self) -> int:
         return len(self.time)
 

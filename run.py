@@ -143,7 +143,20 @@ def main() -> int:
                         help="where to write the HTML page")
     parser.add_argument("--no-open", action="store_true",
                         help="do not open a browser at the end")
+    parser.add_argument(
+        "--include", default="running",
+        help="which activities to analyse: 'running' (default), 'all', or a "
+             "comma list of sports or raw Garmin type keys, e.g. "
+             "'running,cycling' or 'running,strength_training'")
+    parser.add_argument(
+        "--list-types", action="store_true",
+        help="list every activity type in your history with counts, then stop")
+    parser.add_argument(
+        "--feature", default=None,
+        help="activity id to put on the page, instead of picking automatically")
     args = parser.parse_args()
+
+    include = fetch.resolve_include(args.include)
 
     echo("")
     echo("  RUN ANALYSIS FROM YOUR OWN WATCH DATA")
@@ -157,9 +170,27 @@ def main() -> int:
 
     # ------------------------------------------------------------ activities
     step("2b", f"Downloading {args.days} days of activities")
-    runs = fetch.fetch_activities(api, cache, args.days, echo)
+    runs, census = fetch.fetch_activities(api, cache, args.days, echo, include)
+
+    if args.list_types or not runs:
+        echo("")
+        echo("  Everything in your history for this window:")
+        for key, count in sorted(census.items(), key=lambda kv: -kv[1]):
+            mark = ""
+            if include is None or key in include:
+                mark = "  <- included"
+            echo(f"    {count:>4}  {key}{mark}")
+        echo("")
+        echo("  To include more, re-run with --include. For example:")
+        echo("    python3 bootstrap.py --include all")
+        echo("    python3 bootstrap.py --include running,cycling")
+        echo("    python3 bootstrap.py --include running,strength_training")
+    if args.list_types:
+        return 0
     if not runs:
-        echo("  No runs found in that window. Try a longer --days value.")
+        echo("  Nothing matched what you asked to include, so there is nothing")
+        echo("  to analyse. Pick a type from the list above, or use a longer")
+        echo("  --days window.")
         return 1
 
     measurement_system = None
@@ -183,7 +214,7 @@ def main() -> int:
         print(f"\r  [{index}/{len(runs)}] {date} {name[:34]:<34}", end="", flush=True)
 
         bundle = fetch.fetch_activity_bundle(api, cache, activity_id)
-        summary = bundle["summary"] or run
+        summary = fetch.normalize_summary(bundle["summary"], run)
         details = bundle["details"]
         if not details:
             failures.append((f"{date} {name}", "no detail stream returned"))
@@ -230,14 +261,18 @@ def main() -> int:
     echo("")
 
     passed_all = 0
+    unverifiable = 0
     failed_checks: list[str] = []
     for item in activities:
-        checks = item["stream"].checks
-        if all(c.passed for c in checks if c.from_summary is not None):
+        stream = item["stream"]
+        if not stream.verifiable_checks:
+            unverifiable += 1
+            continue
+        if stream.is_verified:
             passed_all += 1
         else:
-            for check in checks:
-                if check.from_summary is not None and not check.passed:
+            for check in stream.verifiable_checks:
+                if not check.passed:
                     failed_checks.append(
                         f"{item['date']} {item['name']}: {check.name} "
                         f"stream {check.from_stream:.1f} vs summary "
@@ -255,7 +290,16 @@ def main() -> int:
              f"summary {check.from_summary:>9.2f} {check.units:<4} "
              f"{check.difference_percent:+6.2f}%  {verdict}")
     echo("")
-    echo(f"  {passed_all} of {len(activities)} runs pass every check.")
+    echo(f"  {passed_all} of {len(activities)} activities verified against\n       their own summary.")
+    if unverifiable:
+        echo(f"  {unverifiable} could NOT be verified: their summary carried no")
+        echo(f"  comparable values. Those are not counted as passing.")
+    if passed_all == 0:
+        echo("")
+        echo("  STOPPING. Not one activity could be verified, so there is no")
+        echo("  evidence the column mapping is correct. Drawing a chart on top")
+        echo("  of that would be exactly the failure this step exists to catch.")
+        return 2
 
     if failed_checks and passed_all < len(activities) * 0.5:
         echo("")
@@ -299,9 +343,26 @@ def main() -> int:
     # -------------------------------------------------- step 5: real zones
     step("5", "Working out YOUR zones, from efforts you actually ran")
 
+    # Max heart rate is a whole-body ceiling, so every sport is evidence for
+    # it. Threshold PACE is not: a bike ride has no minutes per mile worth the
+    # name, so pace is only ever derived from running.
+    foot_activities = [a for a in activities if fetch.is_run(a["raw"])]
+    other_count = len(activities) - len(foot_activities)
+
     max_hr = zones.derive_max_heart_rate(activities)
     if not max_hr:
         echo("  No usable heart rate anywhere in this window. Stopping.")
+        return 1
+    if other_count:
+        echo(f"  Max heart rate is drawn from all {len(activities)} activities")
+        echo(f"  ({other_count} of them not running), because a maximum is a")
+        echo(f"  whole-body ceiling and every sport is evidence for it.")
+        echo(f"  Threshold pace uses only the {len(foot_activities)} runs, because")
+        echo(f"  minutes per mile means nothing on a bike.")
+        echo("")
+    if not foot_activities:
+        echo("  No runs in the included set, so threshold PACE cannot be derived.")
+        echo("  Re-run with --include running (or add it to your list).")
         return 1
 
     echo("  MAX HEART RATE")
@@ -316,7 +377,7 @@ def main() -> int:
          if max_hr.window_30s else "")
     echo(f"    NOT 220-minus-age. This is the highest clean value you produced.")
 
-    threshold_hr = zones.derive_threshold_heart_rate(activities, max_hr)
+    threshold_hr = zones.derive_threshold_heart_rate(foot_activities, max_hr)
     echo("")
     echo("  THRESHOLD HEART RATE")
     echo(f"    Derived            : {threshold_hr.value:.0f} bpm "
@@ -330,7 +391,7 @@ def main() -> int:
         echo(f"      why, and the number is labelled that way everywhere it appears.")
 
     threshold_pace = zones.derive_threshold_pace(
-        activities, max_hr, threshold_hr, measurement_system
+        foot_activities, max_hr, threshold_hr, measurement_system
     )
     echo("")
     echo("  THRESHOLD PACE")
@@ -375,13 +436,25 @@ def main() -> int:
     # ------------------------------------- step 6: pick the run and build it
     step("6", "Building the page for your most recent quality run")
 
-    recent = sorted(activities, key=lambda a: a["date"], reverse=True)
+    recent = sorted(foot_activities, key=lambda a: a["date"], reverse=True)
+    if args.feature:
+        chosen = [a for a in activities if str(a["id"]) == str(args.feature)]
+        if not chosen:
+            echo(f"  No activity with id {args.feature} in the downloaded set.")
+            return 1
+        recent = chosen
     scored = [
         (item, quality_score(item["stream"], threshold_pace.value_min_per_mile))
         for item in recent
     ]
-    target = None
-    for item, score in scored:
+    target = recent[0] if args.feature else None
+    if target:
+        echo(f"  Using the activity you asked for: {target['date']} {target['name']}")
+        if not fetch.is_run(target["raw"]):
+            echo("  Note: this is not a run. The heart rate zones below still")
+            echo("  apply, but the pace zones are derived from running and mean")
+            echo("  little for this sport.")
+    for item, score in (scored if not args.feature else []):
         if score >= 300 and item["stream"].duration_seconds >= 900:
             target = item
             echo(f"  Chose {item['date']} {item['name']}")

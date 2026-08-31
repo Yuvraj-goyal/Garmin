@@ -51,6 +51,54 @@ RUN_TYPES = {
     "obstacle_run",
 }
 
+# Convenience groups for --include. Anything not listed here can still be named
+# directly by its Garmin type key, which --list-types will show you.
+ACTIVITY_GROUPS = {
+    "running": RUN_TYPES,
+    "cycling": {
+        "cycling", "road_biking", "mountain_biking", "gravel_cycling",
+        "indoor_cycling", "virtual_ride", "cyclocross", "e_bike_fitness",
+    },
+    "walking": {"walking", "casual_walking", "speed_walking", "hiking"},
+    "swimming": {"lap_swimming", "open_water_swimming", "swimming"},
+    "strength": {"strength_training", "indoor_cardio", "fitness_equipment"},
+}
+
+
+def activity_type_key(activity: dict[str, Any]) -> str:
+    """The sport key, from whichever shape this activity arrived in."""
+    for field_name in ("activityType", "activityTypeDTO"):
+        holder = activity.get(field_name) or {}
+        if isinstance(holder, dict) and holder.get("typeKey"):
+            return str(holder["typeKey"])
+    return ""
+
+
+def resolve_include(spec: str) -> set[str] | None:
+    """Turn an --include value into a set of type keys. None means everything."""
+    spec = (spec or "running").strip().lower()
+    if spec in ("all", "everything", "*"):
+        return None
+
+    wanted: set[str] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part in ACTIVITY_GROUPS:
+            wanted |= ACTIVITY_GROUPS[part]
+        elif part in ("run", "runs"):
+            wanted |= RUN_TYPES
+        elif part in ("bike", "ride", "rides"):
+            wanted |= ACTIVITY_GROUPS["cycling"]
+        elif part in ("walk", "walks", "hike", "hikes"):
+            wanted |= ACTIVITY_GROUPS["walking"]
+        elif part in ("swim", "swims"):
+            wanted |= ACTIVITY_GROUPS["swimming"]
+        else:
+            wanted.add(part)  # a raw Garmin type key
+    return wanted
+
 
 class ReadOnlyGarmin:
     """Thin guard around the Garmin client that can only read."""
@@ -166,8 +214,7 @@ class Cache:
 
 
 def is_run(activity: dict[str, Any]) -> bool:
-    type_key = (activity.get("activityType") or {}).get("typeKey", "")
-    return type_key in RUN_TYPES
+    return activity_type_key(activity) in RUN_TYPES
 
 
 def fetch_activities(
@@ -175,8 +222,13 @@ def fetch_activities(
     cache: Cache,
     days: int,
     echo: Callable[[str], None],
-) -> list[dict[str, Any]]:
-    """The activity list for the last `days` days, runs only."""
+    include: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """The activity list for the last `days` days, filtered to `include`.
+
+    Returns the selected activities and a census of every type found, so you
+    can see what else is in there that you did not ask for.
+    """
     end = dt.date.today()
     start = end - dt.timedelta(days=days)
     echo(f"  Asking Garmin for activities from {start} to {end} ...")
@@ -185,9 +237,20 @@ def fetch_activities(
         f"activities_{start}_{end}",
         lambda: api.get_activities_by_date(start.isoformat(), end.isoformat()),
     )
-    runs = [a for a in activities if is_run(a)]
-    echo(f"  {len(activities)} activities in the window, {len(runs)} of them runs.")
-    return runs
+
+    census: dict[str, int] = {}
+    for activity in activities:
+        key = activity_type_key(activity) or "(unknown)"
+        census[key] = census.get(key, 0) + 1
+
+    if include is None:
+        selected = list(activities)
+    else:
+        selected = [a for a in activities if activity_type_key(a) in include]
+
+    echo(f"  {len(activities)} activities in the window, "
+         f"{len(selected)} of them selected.")
+    return selected, census
 
 
 def fetch_activity_bundle(
@@ -213,3 +276,50 @@ def fetch_activity_bundle(
         ),
         "weather": _safe("weather", lambda: api.get_activity_weather(activity_id)),
     }
+
+
+# Garmin returns the same activity in two different shapes. The list endpoint
+# gives flat keys; the single-activity endpoint nests the same values under
+# summaryDTO. Reading the wrong one yields None rather than an error, which is
+# how a page ends up reporting 0.00 miles for a run that clearly happened.
+SUMMARY_FIELDS = (
+    "distance", "duration", "movingDuration", "elapsedDuration",
+    "averageHR", "maxHR", "averageSpeed", "maxSpeed", "averageRunCadence",
+    "elevationGain", "elevationLoss", "calories",
+    "startTimeLocal", "startTimeGMT",
+)
+
+
+def normalize_summary(
+    detail: dict[str, Any] | None,
+    list_entry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Flatten either shape into one dict with predictable keys.
+
+    Values are taken from the nested summaryDTO first, then the top level of
+    the detailed activity, then the activity-list entry, so whichever endpoint
+    actually carried the number is the one that wins.
+    """
+    detail = detail or {}
+    list_entry = list_entry or {}
+    nested = detail.get("summaryDTO") or {}
+
+    merged: dict[str, Any] = dict(list_entry)
+    merged.update({k: v for k, v in detail.items() if k != "summaryDTO"})
+    for field_name in SUMMARY_FIELDS:
+        for source in (nested, detail, list_entry):
+            value = source.get(field_name)
+            if value is not None:
+                merged[field_name] = value
+                break
+
+    if not merged.get("activityName"):
+        merged["activityName"] = list_entry.get("activityName") or "Run"
+
+    type_dto = detail.get("activityTypeDTO") or detail.get("activityType") or {}
+    if type_dto.get("typeKey"):
+        merged["activityType"] = {"typeKey": type_dto["typeKey"]}
+    elif list_entry.get("activityType"):
+        merged["activityType"] = list_entry["activityType"]
+
+    return merged
