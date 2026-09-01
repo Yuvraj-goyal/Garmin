@@ -248,6 +248,126 @@ def restart(_: argparse.Namespace) -> int:
     return 0
 
 
+ICLOUD = (Path.home() / "Library" / "Mobile Documents" /
+          "com~apple~CloudDocs" / "Training")
+
+
+def phone(args: argparse.Namespace) -> int:
+    """Sync the page into iCloud Drive so it appears on your phone.
+
+    A copy rather than a link: iCloud does not follow symlinks out of its
+    own folder, so a link here would sync a broken pointer.
+    """
+    folder = Path(args.folder).expanduser() if args.folder else ICLOUD
+    if not args.folder and not ICLOUD.parent.is_dir():
+        print("  iCloud Drive does not appear to be set up on this Mac.")
+        print(f"  Expected it at: {ICLOUD.parent}")
+        print("")
+        print("  Either turn on iCloud Drive in System Settings, or point this")
+        print("  at a Dropbox or Google Drive folder instead:")
+        print("    python3 schedule.py phone --folder ~/Dropbox/Training")
+        print("")
+        print("  Or serve it over your wifi instead, which needs no cloud at all:")
+        print("    python3 schedule.py serve")
+        return 1
+
+    folder.mkdir(parents=True, exist_ok=True)
+    extra = ["--include", "all", "--no-open", "--copy-to", str(folder)]
+
+    if sys.platform == "darwin" and PLIST.exists():
+        args.every, args.at, args.run_args = None, None, extra
+        install(args)
+        print("")
+    else:
+        write_wrapper(extra)
+        print(f"  Set up to copy into: {folder}")
+        print("  (No schedule is installed yet. Add one with: "
+              "python3 schedule.py install)")
+        print("")
+
+    page = HERE / "out" / "training.html"
+    if page.exists():
+        (folder / "training.html").write_text(
+            page.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"  Copied the current page into {folder} now.")
+    else:
+        print("  No page exists yet. Run this first: python3 schedule.py run")
+
+    print("")
+    print("  ON YOUR PHONE")
+    print("    1. Open the Files app")
+    print(f"    2. iCloud Drive -> {folder.name} -> training.html"
+          if folder == ICLOUD else f"    2. Open {folder.name} -> training.html")
+    print("    3. Tap it. Press and hold, then Share -> add it to your Home")
+    print("       Screen or Favourites so it is one tap from then on.")
+    print("")
+    print("  It updates by itself every time the scheduled refresh runs.")
+    print("  The page works without JavaScript, so it reads correctly in the")
+    print("  Files preview as one long scrolling page.")
+    return 0
+
+
+def _lan_address() -> str:
+    """This machine's address on the local network."""
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # No packet is actually sent; this just picks the outbound interface.
+        probe.connect(("192.168.1.1", 9))
+        return probe.getsockname()[0]
+    except OSError:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return "127.0.0.1"
+    finally:
+        probe.close()
+
+
+def serve(args: argparse.Namespace) -> int:
+    """Serve the page to any device on your wifi, in a real browser."""
+    import functools
+    import http.server
+
+    directory = HERE / "out"
+    if not (directory / "training.html").exists():
+        print("  No page to serve yet. Run this first:")
+        print("    python3 schedule.py run")
+        return 1
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def end_headers(self):
+            # Without this a phone caches the page and keeps showing the old
+            # one after a refresh, which is the whole problem we are solving.
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            super().end_headers()
+
+        def log_message(self, *a):  # keep the terminal readable
+            pass
+
+    handler = functools.partial(Handler, directory=str(directory))
+    address = _lan_address()
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", args.port), handler)
+
+    print("")
+    print("  OPEN THIS ON YOUR PHONE (same wifi):")
+    print("")
+    print(f"      http://{address}:{args.port}/training.html")
+    print("")
+    print("  Full app: tabs, tapping into activities, sport filters.")
+    print("  This serves only that one folder, only on your local network,")
+    print("  and nothing is published to the internet.")
+    print("")
+    print("  Leave this running while you use it. Press Ctrl-C to stop.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  Stopped.")
+    finally:
+        server.server_close()
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command")
@@ -273,6 +393,15 @@ def main() -> int:
 
     sub.add_parser("restart", help="restart the scheduled job if it seems stuck"
                    ).set_defaults(func=restart)
+
+    ph = sub.add_parser("phone", help="sync the page to your phone via iCloud")
+    ph.add_argument("--folder", default=None,
+                    help="use this folder instead of iCloud Drive")
+    ph.set_defaults(func=phone, every=None, at=None, run_args=None)
+
+    sv = sub.add_parser("serve", help="serve the page to your phone over wifi")
+    sv.add_argument("--port", type=int, default=8765)
+    sv.set_defaults(func=serve)
 
     link = sub.add_parser("shortcut", help="put a link to the page on the Desktop")
     link.add_argument("--name", default=None,

@@ -102,6 +102,19 @@ LIST_CSS = """
 .fresh span{color:#8b96a3}
 .fresh.stale span,.fresh.old span{color:#95591b}
 .fresh.old span{color:#a32b2b}
+/* Without JavaScript every section stays visible and the page is one long
+   scroll, which is exactly what a phone file preview can render. The .js
+   class is set by the first script on the page, and only then does anything
+   get hidden. Nothing is ever unreachable because a script did not run. */
+.js .tabview{display:none}
+.js .tabview.on{display:block}
+.js .panel{display:none}
+.js .panel.on{display:block}
+.js #listview.off{display:none}
+.nojs-sep{padding:14px 20px;background:#f7f9fb;border-bottom:1px solid #eef1f5;
+  border-top:1px solid #eef1f5;font-size:11px;letter-spacing:1px;
+  text-transform:uppercase;color:#8b96a3;font-weight:640}
+.js .nojs-sep{display:none}
 """
 
 CSS = """
@@ -312,8 +325,8 @@ def _activity_panel(activity: dict[str, Any], index: int,
                       'for this activity.</div></section>')
 
     distance = (f"{activity['miles']:.2f}" if activity["miles"] else "--")
-    return f"""<div class="panel" data-panel="{index}" hidden>
-      <button class="back" onclick="showList()">&larr; All activities</button>
+    return f"""<div class="panel" id="a{index}" data-panel="{index}">
+      <a class="back" href="#top" onclick="showList();return false">&larr; All activities</a>
       <div class="hdr">
         <h1>{html.escape(activity['name'])}</h1>
         <div class="when">{html.escape(activity['when'])} &middot;
@@ -445,7 +458,7 @@ def build_html(context: dict[str, Any]) -> str:
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Training &mdash; {len(activities)} activities</title>
-<style>{CSS}{LIST_CSS}</style></head><body><div class="phone">
+<style>{CSS}{LIST_CSS}</style></head><body><script>document.documentElement.className="js";</script><div class="phone" id="top">
 
 <div class="tabs">
   <button class="on" data-tab="0" onclick="showTab(0)">Activities</button>
@@ -453,7 +466,7 @@ def build_html(context: dict[str, Any]) -> str:
   <button data-tab="2" onclick="showTab(2)">vs Garmin</button>
 </div>
 
-<div class="tabview" data-tab="0">
+<div class="tabview on" data-tab="0">
   <div id="listview">
     <div class="hdr"><h1>Your training</h1>
       <div class="when">{len(activities)} activities over
@@ -472,10 +485,11 @@ def build_html(context: dict[str, Any]) -> str:
     <div id="rows">{''.join(rows)}</div>
     <div class="empty" id="noneleft" hidden>Nothing of that type.</div>
   </div>
+  <div class="nojs-sep">Every activity, in full</div>
   {panels}
 </div>
 
-<div class="tabview" data-tab="1" hidden>
+<div class="tabview" data-tab="1">
   <section><h2>Your zones, derived from your own runs</h2>
     <table><thead><tr><th>Zone</th><th>Pace /mi</th><th>Heart rate</th></tr>
       </thead><tbody>{zone_rows}</tbody></table>
@@ -510,7 +524,7 @@ def build_html(context: dict[str, Any]) -> str:
   </section>
 </div>
 
-<div class="tabview" data-tab="2" hidden>
+<div class="tabview" data-tab="2">
   <section class="cmp"><h2>What Garmin is grading you against</h2>
     <div class="ev" style="color:#8f9dab;margin-bottom:14px">Garmin's own
       stated basis: {basis}</div>
@@ -559,7 +573,7 @@ This file is entirely self-contained. Nothing in it loads from the internet.</di
 
 function showTab(n){{
   document.querySelectorAll('.tabview').forEach(function(v){{
-    v.hidden = (v.dataset.tab !== String(n));
+    v.classList.toggle('on', v.dataset.tab === String(n));
   }});
   document.querySelectorAll('.tabs button').forEach(function(b){{
     b.classList.toggle('on', b.dataset.tab === String(n));
@@ -568,15 +582,17 @@ function showTab(n){{
   window.scrollTo(0, 0);
 }}
 function showPanel(i){{
-  document.getElementById('listview').hidden = true;
+  document.getElementById('listview').classList.add('off');
   document.querySelectorAll('.panel').forEach(function(p){{
-    p.hidden = (p.dataset.panel !== String(i));
+    p.classList.toggle('on', p.dataset.panel === String(i));
   }});
   window.scrollTo(0, 0);
 }}
 function showList(){{
-  document.getElementById('listview').hidden = false;
-  document.querySelectorAll('.panel').forEach(function(p){{ p.hidden = true; }});
+  document.getElementById('listview').classList.remove('off');
+  document.querySelectorAll('.panel').forEach(function(p){{
+    p.classList.remove('on');
+  }});
   window.scrollTo(0, 0);
 }}
 function filterBy(button, sport){{

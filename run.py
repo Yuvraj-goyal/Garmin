@@ -157,6 +157,10 @@ def main() -> int:
         "--list-types", action="store_true",
         help="list every activity type in your history with counts, then stop")
     parser.add_argument(
+        "--copy-to", action="append", default=None, metavar="PATH",
+        help="also write the finished page here (e.g. an iCloud Drive folder "
+             "so it syncs to your phone). May be given more than once.")
+    parser.add_argument(
         "--feature", default=None,
         help="activity id to put on the page, instead of picking automatically")
     args = parser.parse_args()
@@ -606,6 +610,18 @@ def main() -> int:
     echo(f"  Page written to: {out_file}")
     echo(f"  Read-only API calls made this session: {api.calls}")
     echo(f"  Cache hits: {cache.hits} (a re-run costs no API calls at all)")
+
+    for destination in (args.copy_to or []):
+        target = Path(destination).expanduser()
+        if target.is_dir() or not target.suffix:
+            target = target / "training.html"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(html_text, encoding="utf-8")
+            echo(f"  Also copied to: {target}")
+        except OSError as exc:
+            # A sync folder that is not mounted must not fail the whole run.
+            echo(f"  Could not copy to {target}: {exc}")
 
     if not args.no_open:
         webbrowser.open(out_file.as_uri())

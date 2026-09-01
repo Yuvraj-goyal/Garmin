@@ -56,6 +56,8 @@ python3 schedule.py run                  # refresh right now, in this terminal
 python3 schedule.py status               # installed? did the last run work?
 python3 schedule.py restart              # restart the job if it seems stuck
 python3 schedule.py shortcut             # put a link on the Desktop
+python3 schedule.py phone                # sync it to your phone via iCloud
+python3 schedule.py serve                # or serve it over your wifi
 python3 schedule.py uninstall            # remove it entirely
 ```
 
@@ -88,6 +90,25 @@ plainly. Running it by hand once restores the session and the schedule resumes.
 
 Everything it runs is your local script. It sends nothing anywhere, and
 removing it leaves your data, cache and pages untouched.
+
+## On your phone
+
+Two ways, both keeping the data on your own devices.
+
+**iCloud (works anywhere).** `python3 schedule.py phone` copies the page into
+iCloud Drive after every refresh. Open the Files app on your phone, tap it, and
+add it to your Home Screen. Pass `--folder ~/Dropbox/Training` to use a
+different sync service. It is a copy rather than a symlink because iCloud does
+not follow links out of its own folder.
+
+**Local wifi (always live).** `python3 schedule.py serve` prints an address to
+open on your phone. That is the full app, in a real browser, served only on
+your local network. Your Mac has to be awake and on the same wifi.
+
+The page needs no JavaScript to be readable. With it you get tabs and
+tap-through activities; without it, everything is visible as one long scrolling
+page. That matters because phone file previews restrict scripts, and nothing
+should become unreachable just because a script did not run.
 
 ## Privacy
 
