@@ -52,9 +52,17 @@ change it; re-running the tool regenerates it. To have that happen on its own:
 ```
 python3 schedule.py install              # every 4 hours
 python3 schedule.py install --at 06:00   # or a daily time
+python3 schedule.py run                  # refresh right now, in this terminal
 python3 schedule.py status               # installed? did the last run work?
+python3 schedule.py restart              # restart the job if it seems stuck
+python3 schedule.py shortcut             # put a link on the Desktop
 python3 schedule.py uninstall            # remove it entirely
 ```
+
+Nothing stays running between refreshes. There is no server and no background
+app holding state: the tool runs, writes the page, and exits. So "restarting"
+means either running it again (`run`) or restarting the schedule that runs it
+(`restart`).
 
 On macOS this installs a `launchd` agent in `~/Library/LaunchAgents`. It runs
 once immediately, then on your chosen schedule, and catches up after your Mac

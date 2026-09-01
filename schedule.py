@@ -206,6 +206,48 @@ def shortcut(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_now(args: argparse.Namespace) -> int:
+    """Refresh immediately, in this terminal, with output you can see.
+
+    Deliberately not routed through the launchd wrapper. This one keeps your
+    terminal attached, so if Garmin has ended the session you can actually
+    answer the login and 2FA prompt -- which is the whole reason a scheduled
+    run fails and the one thing a background job can never do.
+    """
+    extra = [a for a in (args.run_args or []) if a != "--"] or ["--include", "all"]
+    command = [sys.executable, str(HERE / "bootstrap.py")] + extra
+    print(f"  Running: {' '.join(command[1:])}")
+    print("")
+    return subprocess.run(command).returncode
+
+
+def restart(_: argparse.Namespace) -> int:
+    """Stop and start the scheduled job. Only useful if it seems stuck."""
+    if sys.platform != "darwin":
+        print("  There is no scheduled job to restart on this platform.")
+        return 1
+    if not PLIST.exists():
+        print("  Nothing is scheduled, so there is nothing to restart.")
+        print("  Install it with:  python3 schedule.py install")
+        return 1
+
+    target = f"gui/{os.getuid()}/{LABEL}"
+    result = launchctl("kickstart", "-k", target)
+    if result.returncode != 0:
+        launchctl("bootout", target)
+        result = launchctl("bootstrap", f"gui/{os.getuid()}", str(PLIST))
+    if result.returncode != 0:
+        print("  Could not restart it:")
+        print("   ", (result.stderr or result.stdout).strip()[:300])
+        print("  Reinstalling usually clears this:")
+        print("    python3 schedule.py install")
+        return result.returncode
+
+    print("  Restarted. It is refreshing now; give it a minute, then:")
+    print("    python3 schedule.py status")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command")
@@ -223,6 +265,14 @@ def main() -> int:
         func=status)
     sub.add_parser("uninstall", help="remove it entirely").set_defaults(
         func=uninstall)
+
+    now = sub.add_parser("run", help="refresh right now, in this terminal")
+    now.add_argument("run_args", nargs=argparse.REMAINDER,
+                     help="arguments passed to bootstrap.py")
+    now.set_defaults(func=run_now)
+
+    sub.add_parser("restart", help="restart the scheduled job if it seems stuck"
+                   ).set_defaults(func=restart)
 
     link = sub.add_parser("shortcut", help="put a link to the page on the Desktop")
     link.add_argument("--name", default=None,
