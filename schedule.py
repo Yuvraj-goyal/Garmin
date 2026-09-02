@@ -286,12 +286,48 @@ def phone(args: argparse.Namespace) -> int:
         print("")
 
     page = HERE / "out" / "training.html"
-    if page.exists():
-        (folder / "training.html").write_text(
-            page.read_text(encoding="utf-8"), encoding="utf-8")
-        print(f"  Copied the current page into {folder} now.")
-    else:
-        print("  No page exists yet. Run this first: python3 schedule.py run")
+
+    # Older versions wrote a dated filename. If one of those is lying around
+    # and the current name is not, the page simply has not been rebuilt since.
+    stale = sorted((HERE / "out").glob("run-*.html")) if (HERE / "out").is_dir() else []
+
+    if not page.exists():
+        if stale:
+            print(f"  Found an older page ({stale[-1].name}) but not the current")
+            print("  one, so the analysis has not been rebuilt since the layout")
+            print("  changed. Rebuilding it now.")
+        else:
+            print("  No page exists yet, so there is nothing to sync. Building")
+            print("  it now.")
+        print("")
+        result = subprocess.run(
+            [sys.executable, str(HERE / "bootstrap.py"),
+             "--include", "all", "--no-open"]
+        )
+        print("")
+        if result.returncode != 0 or not page.exists():
+            print("  The refresh did not finish, so nothing was copied. The")
+            print("  output above says why -- most often Garmin wanting a fresh")
+            print("  login. Once that succeeds, run this again:")
+            print("    python3 schedule.py phone")
+            return result.returncode or 1
+
+    destination = folder / "training.html"
+    try:
+        destination.write_bytes(page.read_bytes())
+    except OSError as exc:
+        print(f"  Could not write to {destination}: {exc}")
+        print("  Check the folder exists and is writable, or pass another with")
+        print("    python3 schedule.py phone --folder ~/Dropbox/Training")
+        return 1
+
+    size = destination.stat().st_size
+    if size < 1000:
+        print(f"  WARNING: only {size} bytes were written. That is too small to")
+        print("  be a real page. Something is wrong; do not trust it.")
+        return 1
+    print(f"  Copied {size / 1024:.0f} KB to {destination}")
+    print("  Verify it in Finder first: it should be there right now.")
 
     print("")
     print("  ON YOUR PHONE")
