@@ -307,21 +307,82 @@ def phone(args: argparse.Namespace) -> int:
     return 0
 
 
-def _lan_address() -> str:
-    """This machine's address on the local network."""
+def _lan_addresses() -> list[str]:
+    """Every IPv4 address this machine actually has, best candidate first.
+
+    Guessing one address by probing a hard-coded router IP breaks the moment
+    the network is not on that subnet, and can hand back a VPN or virtual
+    interface instead. Listing them all lets you try the one that works
+    rather than trusting a guess.
+    """
+    import re
     import socket
+
+    found: list[str] = []
+
+    def add(address: str) -> None:
+        if (address and address not in found
+                and not address.startswith("127.")
+                and not address.startswith("169.254.")):
+            found.append(address)
+
+    # macOS names its wifi and ethernet interfaces predictably; ask directly.
+    if sys.platform == "darwin":
+        for interface in ("en0", "en1", "en2", "en3"):
+            result = subprocess.run(["ipconfig", "getifaddr", interface],
+                                    capture_output=True, text=True)
+            if result.returncode == 0:
+                add(result.stdout.strip())
+
+    # Then whatever the routing table picks for the outside world.
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # No packet is actually sent; this just picks the outbound interface.
-        probe.connect(("192.168.1.1", 9))
-        return probe.getsockname()[0]
+        probe.connect(("8.8.8.8", 9))   # no packet is sent
+        add(probe.getsockname()[0])
     except OSError:
-        try:
-            return socket.gethostbyname(socket.gethostname())
-        except OSError:
-            return "127.0.0.1"
+        pass
     finally:
         probe.close()
+
+    # Finally anything else configured, so nothing is missed.
+    for command in (["ifconfig"], ["ip", "-4", "addr"]):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+        except FileNotFoundError:
+            continue
+        if result.returncode == 0:
+            for match in re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)",
+                                    result.stdout):
+                add(match)
+            break
+
+    return found
+
+
+def _firewall_warning() -> list[str]:
+    """macOS blocks incoming connections when its firewall is on."""
+    if sys.platform != "darwin":
+        return []
+    tool = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+    if not Path(tool).exists():
+        return []
+    result = subprocess.run([tool, "--getglobalstate"],
+                            capture_output=True, text=True)
+    text = (result.stdout or "").lower()
+    if "enabled" not in text or "state = 0" in text:
+        return []
+    return [
+        "  macOS's firewall is ON, which blocks incoming connections and is",
+        "  the usual reason a phone cannot reach this. Either allow Python:",
+        "",
+        f"    sudo {tool} --add {sys.executable}",
+        f"    sudo {tool} --unblockapp {sys.executable}",
+        "",
+        "  or skip the network entirely and use iCloud instead:",
+        "",
+        "    python3 schedule.py phone",
+        "",
+    ]
 
 
 def serve(args: argparse.Namespace) -> int:
@@ -345,25 +406,83 @@ def serve(args: argparse.Namespace) -> int:
         def log_message(self, *a):  # keep the terminal readable
             pass
 
+        def handle_one_request(self):
+            # A phone that navigates away mid-transfer resets the connection.
+            # That is normal and must not print a stack trace at someone.
+            try:
+                super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+
+    class Server(http.server.ThreadingHTTPServer):
+        def handle_error(self, request, client_address):
+            pass  # a dropped connection is not an error worth printing
+
     handler = functools.partial(Handler, directory=str(directory))
-    address = _lan_address()
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", args.port), handler)
+    try:
+        server = Server(("0.0.0.0", args.port), handler)
+    except OSError as exc:
+        print(f"  Could not open port {args.port}: {exc}")
+        print(f"  Something else is probably using it. Try another:")
+        print(f"    python3 schedule.py serve --port {args.port + 1}")
+        return 1
+
+    # Prove the server answers before claiming it is reachable.
+    import threading
+    import urllib.request
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{args.port}/training.html", timeout=5) as reply:
+            # Read the body fully; closing early resets the connection and
+            # makes the server log an error about our own health check.
+            ok = reply.status == 200 and len(reply.read()) > 0
+    except Exception:
+        ok = False
+
+    addresses = _lan_addresses()
+    print("")
+    if not ok:
+        print("  The server started but did not answer its own request, which")
+        print("  means something is wrong locally rather than on your phone.")
+        server.shutdown()
+        return 1
+
+    print(f"  Serving {directory} on port {args.port}. Verified working.")
+    print("")
+    if addresses:
+        print("  OPEN ONE OF THESE ON YOUR PHONE (same wifi):")
+        print("")
+        for address in addresses:
+            print(f"      http://{address}:{args.port}/training.html")
+        if len(addresses) > 1:
+            print("")
+            print("  More than one address exists because this Mac has several")
+            print("  network interfaces. The first is usually wifi; if it does")
+            print("  not load, try the next.")
+    else:
+        print("  No network address was found, so this Mac may be offline.")
+
+    for line in _firewall_warning():
+        print(line)
 
     print("")
-    print("  OPEN THIS ON YOUR PHONE (same wifi):")
+    print("  If the phone still cannot connect, check in this order:")
+    print("    1. Phone on the SAME wifi, not cellular and not a guest network")
+    print("    2. macOS firewall set to allow Python, and any VPN off")
+    print("    3. Router 'client isolation' or 'AP isolation' turned off")
     print("")
-    print(f"      http://{address}:{args.port}/training.html")
-    print("")
-    print("  Full app: tabs, tapping into activities, sport filters.")
-    print("  This serves only that one folder, only on your local network,")
-    print("  and nothing is published to the internet.")
+    print("  If none of that works, iCloud needs no network at all:")
+    print("    python3 schedule.py phone")
     print("")
     print("  Leave this running while you use it. Press Ctrl-C to stop.")
     try:
-        server.serve_forever()
+        while True:
+            __import__("time").sleep(3600)
     except KeyboardInterrupt:
         print("\n  Stopped.")
     finally:
+        server.shutdown()
         server.server_close()
     return 0
 
