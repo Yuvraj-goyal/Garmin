@@ -14,6 +14,7 @@ launchd hands us can always run it.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import plistlib
 import subprocess
@@ -51,6 +52,7 @@ def write_wrapper(extra_args: list[str]) -> Path:
         "exit $code\n"
     )
     WRAPPER.chmod(0o755)
+    (LOGS / "args.json").write_text(json.dumps(extra_args))
     return WRAPPER
 
 
@@ -274,15 +276,22 @@ def phone(args: argparse.Namespace) -> int:
     folder.mkdir(parents=True, exist_ok=True)
     extra = ["--include", "all", "--no-open", "--copy-to", str(folder)]
 
-    if sys.platform == "darwin" and PLIST.exists():
+    if sys.platform == "darwin":
+        # Install or re-install so the SCHEDULED run copies into the folder
+        # too. Only rewiring an existing schedule meant that without one, a
+        # single manual copy happened and nothing ever updated it -- which
+        # looks exactly like iCloud failing to sync.
+        if not PLIST.exists():
+            print("  No automatic refresh was set up yet, so nothing would ever")
+            print("  update the copy. Setting one up now as well.")
+            print("")
         args.every, args.at, args.run_args = None, None, extra
-        install(args)
+        if install(args) != 0:
+            return 1
         print("")
     else:
         write_wrapper(extra)
         print(f"  Set up to copy into: {folder}")
-        print("  (No schedule is installed yet. Add one with: "
-              "python3 schedule.py install)")
         print("")
 
     page = HERE / "out" / "training.html"
@@ -544,6 +553,129 @@ class Parser(argparse.ArgumentParser):
         super().error(message)
 
 
+def doctor(_: argparse.Namespace) -> int:
+    """Check the whole chain, so a break can be located rather than guessed at."""
+    import time
+
+    def age(path: Path) -> str:
+        minutes = (time.time() - path.stat().st_mtime) / 60
+        if minutes < 90:
+            return f"{minutes:.0f} minutes old"
+        if minutes < 2880:
+            return f"{minutes / 60:.0f} hours old"
+        return f"{minutes / 1440:.0f} days old"
+
+    problems: list[str] = []
+    print("")
+    print("  1. THE PAGE ON THIS MAC")
+    page = HERE / "out" / "training.html"
+    if page.exists():
+        print(f"     {page}")
+        print(f"     {page.stat().st_size / 1024:.0f} KB, {age(page)}")
+    else:
+        print("     MISSING. Nothing has been built yet.")
+        problems.append("Build the page:  python3 schedule.py run")
+
+    print("")
+    print("  2. THE AUTOMATIC REFRESH")
+    if not PLIST.exists():
+        print("     Not installed. Nothing refreshes on its own.")
+        problems.append("Set up the schedule:  python3 schedule.py phone")
+    else:
+        print(f"     Installed at {PLIST}")
+        if sys.platform == "darwin":
+            registered = LABEL in (launchctl("list").stdout or "")
+            print(f"     Registered with launchd: {'yes' if registered else 'NO'}")
+            if not registered:
+                problems.append(
+                    "Register it:  python3 schedule.py install")
+        try:
+            job = plistlib.loads(PLIST.read_bytes())
+            if "StartInterval" in job:
+                print(f"     Runs every {job['StartInterval'] / 3600:g} hours")
+            elif "StartCalendarInterval" in job:
+                when = job["StartCalendarInterval"]
+                print(f"     Runs daily at "
+                      f"{when.get('Hour', 0):02d}:{when.get('Minute', 0):02d}")
+        except Exception:
+            pass
+
+    print("")
+    print("  3. WHAT THE SCHEDULED RUN DOES")
+    args_file = LOGS / "args.json"
+    scheduled_args: list[str] = []
+    if args_file.exists():
+        try:
+            scheduled_args = json.loads(args_file.read_text())
+        except ValueError:
+            pass
+    if scheduled_args:
+        print(f"     bootstrap.py {' '.join(scheduled_args)}")
+    else:
+        print("     Unknown -- it has not been configured.")
+
+    if LAST_RUN.exists():
+        text = LAST_RUN.read_text().strip()
+        print(f"     Last run: {text.splitlines()[0]}")
+        if "exit=0" in text:
+            print("     Last run succeeded.")
+        else:
+            print("     LAST RUN FAILED.")
+            problems.append(
+                "Log in again by hand:  python3 schedule.py run")
+    else:
+        print("     It has never run.")
+
+    print("")
+    print("  4. THE COPY FOR YOUR PHONE")
+    destination = None
+    if "--copy-to" in scheduled_args:
+        destination = Path(scheduled_args[scheduled_args.index("--copy-to") + 1])
+    if destination is None:
+        print("     The scheduled run does NOT copy anywhere, so the phone")
+        print("     folder can never update by itself.")
+        problems.append("Wire up the copy:  python3 schedule.py phone")
+    else:
+        copy = destination / "training.html"
+        print(f"     {copy}")
+        if not destination.is_dir():
+            print("     The folder does not exist.")
+            problems.append(f"Recreate it:  python3 schedule.py phone")
+        elif copy.exists():
+            print(f"     {copy.stat().st_size / 1024:.0f} KB, {age(copy)}")
+            if page.exists() and copy.stat().st_mtime < page.stat().st_mtime - 60:
+                print("     It is OLDER than the page on this Mac, so the last")
+                print("     refresh did not reach it.")
+                problems.append("Copy it now:  python3 schedule.py phone")
+        else:
+            placeholders = list(destination.glob(".*.icloud"))
+            if placeholders:
+                print("     Present but not downloaded on this Mac (iCloud has")
+                print("     evicted it to save space). That is fine; your phone")
+                print("     can still open it.")
+            else:
+                print("     MISSING from the folder.")
+                problems.append("Copy it now:  python3 schedule.py phone")
+
+        if "com~apple~CloudDocs" in str(destination):
+            print("     This is inside iCloud Drive, so syncing is Apple's job")
+            print("     once the file is there. On the phone check Settings ->")
+            print("     your name -> iCloud -> iCloud Drive is ON.")
+
+    print("")
+    if problems:
+        print("  WHAT TO DO, IN ORDER:")
+        for i, item in enumerate(problems, start=1):
+            print(f"    {i}. {item}")
+    else:
+        print("  Everything checks out. If the phone still shows nothing, the")
+        print("  file is on this Mac and the remaining step is Apple's sync:")
+        print("  open the Files app, pull down to refresh, and confirm iCloud")
+        print("  Drive is enabled on the phone.")
+    print("")
+    return 0
+
+
 def main() -> int:
     parser = Parser(description=__doc__)
     sub = parser.add_subparsers(dest="command")
@@ -569,6 +701,9 @@ def main() -> int:
 
     sub.add_parser("restart", help="restart the scheduled job if it seems stuck"
                    ).set_defaults(func=restart)
+
+    sub.add_parser("doctor", help="check the whole chain and say what is broken"
+                   ).set_defaults(func=doctor)
 
     ph = sub.add_parser("phone", help="sync the page to your phone via iCloud")
     ph.add_argument("--folder", default=None,

@@ -54,6 +54,7 @@ python3 schedule.py install              # every 4 hours
 python3 schedule.py install --at 06:00   # or a daily time
 python3 schedule.py run                  # refresh right now, in this terminal
 python3 schedule.py status               # installed? did the last run work?
+python3 schedule.py doctor               # check the whole chain, end to end
 python3 schedule.py restart              # restart the job if it seems stuck
 python3 schedule.py shortcut             # put a link on the Desktop
 python3 schedule.py phone                # sync it to your phone via iCloud
