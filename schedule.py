@@ -368,8 +368,29 @@ def serve(args: argparse.Namespace) -> int:
     return 0
 
 
+class Parser(argparse.ArgumentParser):
+    """Argparse, but an unknown command says the likely reason.
+
+    A command that exists upstream and not here means this checkout is
+    behind. The bare "invalid choice" leaves you comparing your list against
+    instructions written for a newer version, which is not a puzzle worth
+    handing anyone.
+    """
+
+    def error(self, message: str) -> "NoReturn":  # type: ignore[override]
+        if "invalid choice" in message:
+            sys.stderr.write(f"\n  {message}\n\n")
+            sys.stderr.write(
+                "  If you were told to run a command that is not in that list,\n"
+                "  this copy is probably out of date. Update and retry in one go:\n\n"
+                f"    cd '{HERE}' && git pull && python3 schedule.py --help\n\n"
+            )
+            raise SystemExit(2)
+        super().error(message)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = Parser(description=__doc__)
     sub = parser.add_subparsers(dest="command")
 
     add = sub.add_parser("install", help="install the scheduled refresh")
